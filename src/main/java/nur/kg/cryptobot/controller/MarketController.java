@@ -8,16 +8,16 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
+
 @RestController
 @RequiredArgsConstructor
 public class MarketController {
 
     private final MarketService marketService;
 
-    @PostMapping("/process")
-    public Mono<Void> processMarket(Flux<TickerDto> requestDto) {
-
-        marketService.processMarket(requestDto);
-
+    @PostMapping("/tickers/stream")
+    public Mono<Void> stream(Flux<TickerDto> stream) {
+        return marketService.processMarket(stream, Duration.ofMinutes(1));
     }
 }
