@@ -16,7 +16,7 @@ public class MarketClient {
 
     public Mono<Void> processOrder(OrderRequest orderRequest) {
         return http.post()
-                .uri("/api/v1/orders")
+                .uri("/api/orders")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(orderRequest)
                 .retrieve()
