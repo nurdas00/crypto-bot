@@ -1,8 +1,12 @@
+server:
+  port: 8081
+
 spring:
   application:
     name: crypto-bot
   mvc:
     servlet:
       path: api
-server:
-  port: 8081
+
+exchange:
+  url: localhost:8080

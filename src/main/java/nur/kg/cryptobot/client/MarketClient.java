@@ -1,5 +1,8 @@
 package nur.kg.cryptobot.client;
 
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
+import nur.kg.cryptobot.config.ConfigVariable;
 import nur.kg.domain.request.OrderRequest;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -10,12 +13,18 @@ import reactor.util.retry.Retry;
 import java.time.Duration;
 
 @Service
+@RequiredArgsConstructor
 public class MarketClient {
 
-    private final WebClient http = WebClient.builder().baseUrl("localhost:8080").build();
+    private WebClient webClient;
+    private final ConfigVariable variable;
 
+    @PostConstruct
+    public void init() {
+        webClient = WebClient.builder().baseUrl(variable.getExchangeUrl()).build();
+    }
     public Mono<Void> processOrder(OrderRequest orderRequest) {
-        return http.post()
+        return webClient.post()
                 .uri("/api/orders")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(orderRequest)
