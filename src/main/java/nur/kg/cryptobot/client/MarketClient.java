@@ -12,7 +12,7 @@ import java.time.Duration;
 @Service
 public class MarketClient {
 
-    private final WebClient http = WebClient.builder().build();
+    private final WebClient http = WebClient.builder().baseUrl("localhost:8080").build();
 
     public Mono<Void> processOrder(OrderRequest orderRequest) {
         return http.post()
