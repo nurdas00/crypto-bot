@@ -6,7 +6,7 @@ import org.springframework.context.annotation.Configuration;
 
 @Getter
 @Configuration
-public class ConfigVariable {
+public class AppProperties {
 
     @Value("${exchange.url}")
     private String exchangeUrl;

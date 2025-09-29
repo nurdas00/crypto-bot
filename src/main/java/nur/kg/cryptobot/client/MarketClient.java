@@ -2,7 +2,7 @@ package nur.kg.cryptobot.client;
 
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import nur.kg.cryptobot.config.ConfigVariable;
+import nur.kg.cryptobot.config.AppProperties;
 import nur.kg.domain.request.OrderRequest;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -17,7 +17,7 @@ import java.time.Duration;
 public class MarketClient {
 
     private WebClient webClient;
-    private final ConfigVariable variable;
+    private final AppProperties variable;
 
     @PostConstruct
     public void init() {
