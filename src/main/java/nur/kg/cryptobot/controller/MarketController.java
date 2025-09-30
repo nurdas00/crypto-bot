@@ -11,8 +11,6 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.time.Duration;
-
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api")
@@ -22,6 +20,6 @@ public class MarketController {
 
     @PostMapping(value = "/tickers/stream", consumes = MediaType.APPLICATION_NDJSON_VALUE)
     public Mono<Void> stream(@RequestBody Flux<TickerDto> stream) {
-        return marketService.processMarket(stream, Duration.ofSeconds(5));
+        return marketService.processMarket(stream);
     }
 }

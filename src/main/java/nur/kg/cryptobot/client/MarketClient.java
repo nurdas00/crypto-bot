@@ -3,7 +3,7 @@ package nur.kg.cryptobot.client;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
-import nur.kg.cryptobot.config.AppProperties;
+import nur.kg.cryptobot.config.ExchangeProperties;
 import nur.kg.domain.request.OrderRequest;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -19,14 +19,15 @@ import java.time.Duration;
 public class MarketClient {
 
     private WebClient webClient;
-    private final AppProperties variable;
+    private final ExchangeProperties exchangeProperties;
 
     @PostConstruct
     public void init() {
-        webClient = WebClient.builder().baseUrl(variable.getExchangeUrl()).build();
+        webClient = WebClient.builder().baseUrl(exchangeProperties.url()).build();
     }
+
     public Mono<Void> processOrder(OrderRequest orderRequest) {
-        log.info("Sending order...");
+
         return webClient.post()
                 .uri("/api/orders")
                 .contentType(MediaType.APPLICATION_JSON)

@@ -22,13 +22,14 @@ public class MarketService {
 
     private final MarketClient client;
 
-    public Mono<Void> processMarket(Flux<TickerDto> ticks, Duration period) {
+    public Mono<Void> processMarket(Flux<TickerDto> ticks) {
         return ticks
-                .doOnNext(t -> log.info("BOT: received {}", t))
-                .onBackpressureLatest()
-                .sample(period)
-                .map(this::toOrderRequest)
-                .concatMap(client::processOrder)
+                .sample(Duration.ofSeconds(10))
+                .concatMap(dto ->
+                        client.processOrder(toOrderRequest(dto))
+                                .doOnError(e -> log.warn("order failed", e))
+                                .onErrorResume(e -> Mono.empty())
+                )
                 .then();
     }
 
