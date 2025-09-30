@@ -4,9 +4,6 @@ server:
 spring:
   application:
     name: crypto-bot
-  mvc:
-    servlet:
-      path: api
 
 exchange:
-  url: localhost:8080
+  url: 'http://localhost:8080'

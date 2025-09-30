@@ -2,6 +2,7 @@ package nur.kg.cryptobot.client;
 
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.log4j.Log4j2;
 import nur.kg.cryptobot.config.AppProperties;
 import nur.kg.domain.request.OrderRequest;
 import org.springframework.http.MediaType;
@@ -12,6 +13,7 @@ import reactor.util.retry.Retry;
 
 import java.time.Duration;
 
+@Log4j2
 @Service
 @RequiredArgsConstructor
 public class MarketClient {
@@ -24,6 +26,7 @@ public class MarketClient {
         webClient = WebClient.builder().baseUrl(variable.getExchangeUrl()).build();
     }
     public Mono<Void> processOrder(OrderRequest orderRequest) {
+        log.info("Sending order...");
         return webClient.post()
                 .uri("/api/orders")
                 .contentType(MediaType.APPLICATION_JSON)

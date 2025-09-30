@@ -1,6 +1,7 @@
 package nur.kg.cryptobot.service;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.log4j.Log4j2;
 import nur.kg.cryptobot.client.MarketClient;
 import nur.kg.domain.dto.TickerDto;
 import nur.kg.domain.enums.OrderType;
@@ -14,6 +15,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.UUID;
 
+@Log4j2
 @Service
 @RequiredArgsConstructor
 public class MarketService {
@@ -22,6 +24,7 @@ public class MarketService {
 
     public Mono<Void> processMarket(Flux<TickerDto> ticks, Duration period) {
         return ticks
+                .doOnNext(t -> log.info("BOT: received {}", t))
                 .onBackpressureLatest()
                 .sample(period)
                 .map(this::toOrderRequest)
