@@ -27,7 +27,6 @@ public class MarketClient {
     }
 
     public Mono<Void> processOrder(OrderRequest orderRequest) {
-
         return webClient.post()
                 .uri("/api/orders")
                 .contentType(MediaType.APPLICATION_JSON)
