@@ -35,6 +35,7 @@ public class MarketService {
 
     private OrderRequest toOrderRequest(TickerDto t) {
         UUID orderId = UUID.randomUUID();
+
         return new OrderRequest(orderId.toString(), t.symbol(),
                 Side.BUY, OrderType.MARKET,
                 BigDecimal.valueOf(0.01), t.last(),
