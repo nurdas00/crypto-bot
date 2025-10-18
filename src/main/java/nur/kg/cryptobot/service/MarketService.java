@@ -31,6 +31,7 @@ public class MarketService {
         metricsService.registerInflightOrdersGauge(inflight);
     }
 
+    // TODO: write market processing strategy
     public Mono<Void> processMarket(Flux<TickerDto> ticks) {
         return ticks
                 .doOnNext(t -> metricsService.getTicksReceivedCounter(t.symbol()).increment())
