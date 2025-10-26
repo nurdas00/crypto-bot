@@ -6,13 +6,19 @@ import nur.kg.cryptobot.metrics.MetricsService;
 import nur.kg.domain.dto.TickerDto;
 import nur.kg.domain.enums.OrderType;
 import nur.kg.domain.enums.Side;
+import nur.kg.domain.enums.Symbol;
 import nur.kg.domain.request.OrderRequest;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -20,18 +26,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Service
 public class MarketService {
 
-    private final MarketClient client;
     private final MetricsService metricsService;
+    private final MarketClient client;
+    private final AtomicInteger inflight = new AtomicInteger();
 
-    private final AtomicInteger inflight = new AtomicInteger(0);
+    private final Map<Symbol, MarketState> stateMap = new ConcurrentHashMap<>();
 
-    public MarketService(MarketClient client, MetricsService metricsService) {
-        this.client = client;
+    private static final int SHORT_WINDOW = 5;
+    private static final int LONG_WINDOW = 20;
+
+    public MarketService(MetricsService metricsService, MarketClient client) {
         this.metricsService = metricsService;
-        metricsService.registerInflightOrdersGauge(inflight);
+        this.client = client;
     }
 
-    // TODO: write market processing strategy
     public Mono<Void> processMarket(Flux<TickerDto> ticks) {
         return ticks
                 .doOnNext(t -> metricsService.getTicksReceivedCounter(t.symbol()).increment())
@@ -43,12 +51,35 @@ public class MarketService {
     }
 
     private Mono<Void> processSingle(TickerDto dto) {
-        if (dto.last() != null) {
-            metricsService.getPriceSummary(dto.symbol()).record(dto.last().doubleValue());
+        if (dto.last() == null) return Mono.empty();
+        metricsService.getPriceSummary(dto.symbol()).record(dto.last().doubleValue());
+
+        MarketState state = stateMap.computeIfAbsent(dto.symbol(), s -> new MarketState(SHORT_WINDOW, LONG_WINDOW));
+        state.update(dto.last());
+
+        if (!state.ready()) return Mono.empty();
+
+        BigDecimal shortAvg = state.shortAverage();
+        BigDecimal longAvg = state.longAverage();
+        Side signal = null;
+
+        if (!state.positionOpen && shortAvg.compareTo(longAvg) > 0) {
+            signal = Side.BUY;
+            state.positionOpen = true;
+        } else if (state.positionOpen && shortAvg.compareTo(longAvg) < 0) {
+            signal = Side.SELL;
+            state.positionOpen = false;
         }
 
-        OrderRequest order = toOrderRequest(dto);
+        if (signal != null) {
+            OrderRequest order = toOrderRequest(dto);
+            return submitOrder(dto, order);
+        }
 
+        return Mono.empty();
+    }
+
+    private Mono<Void> submitOrder(TickerDto dto, OrderRequest order) {
         return Mono.defer(() -> {
             metricsService.getOrdersSubmittedCounter(dto.symbol()).increment();
             inflight.incrementAndGet();
@@ -57,13 +88,15 @@ public class MarketService {
             return client.processOrder(order)
                     .doOnSuccess(v -> {
                         long elapsed = System.nanoTime() - start;
-                        metricsService.getOrderProcessingTimer(dto.symbol()).record(elapsed, TimeUnit.NANOSECONDS);
+                        metricsService.getOrderProcessingTimer(dto.symbol())
+                                .record(elapsed, TimeUnit.NANOSECONDS);
                         log.info("Order {} processed success for {} @{}", order.id(), order.symbol(), order.limitPrice());
                     })
                     .doOnError(e -> {
                         metricsService.getOrdersFailedCounter(dto.symbol()).increment();
                         long elapsed = System.nanoTime() - start;
-                        metricsService.getOrderProcessingTimer(dto.symbol()).record(elapsed, TimeUnit.NANOSECONDS);
+                        metricsService.getOrderProcessingTimer(dto.symbol())
+                                .record(elapsed, TimeUnit.NANOSECONDS);
                         log.warn("Order {} failed for {}: {}", order.id(), order.symbol(), e.toString());
                     })
                     .onErrorResume(e -> Mono.empty())
@@ -80,8 +113,45 @@ public class MarketService {
                 OrderType.MARKET,
                 BigDecimal.valueOf(0.01),
                 t.last(),
-                "TEST",
+                "moving_average_signal",
                 t.exchange()
         );
+    }
+
+    private static class MarketState {
+        private final Deque<BigDecimal> shortWindow = new ArrayDeque<>();
+        private final Deque<BigDecimal> longWindow = new ArrayDeque<>();
+        private final int shortSize;
+        private final int longSize;
+        private BigDecimal shortSum = BigDecimal.ZERO;
+        private BigDecimal longSum = BigDecimal.ZERO;
+        private boolean positionOpen = false;
+
+        MarketState(int shortSize, int longSize) {
+            this.shortSize = shortSize;
+            this.longSize = longSize;
+        }
+
+        void update(BigDecimal price) {
+            shortWindow.addLast(price);
+            shortSum = shortSum.add(price);
+            if (shortWindow.size() > shortSize) shortSum = shortSum.subtract(shortWindow.removeFirst());
+
+            longWindow.addLast(price);
+            longSum = longSum.add(price);
+            if (longWindow.size() > longSize) longSum = longSum.subtract(longWindow.removeFirst());
+        }
+
+        boolean ready() {
+            return shortWindow.size() >= shortSize && longWindow.size() >= longSize;
+        }
+
+        BigDecimal shortAverage() {
+            return shortSum.divide(BigDecimal.valueOf(shortWindow.size()), RoundingMode.HALF_UP);
+        }
+
+        BigDecimal longAverage() {
+            return longSum.divide(BigDecimal.valueOf(longWindow.size()), RoundingMode.HALF_UP);
+        }
     }
 }
