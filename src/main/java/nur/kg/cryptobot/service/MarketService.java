@@ -4,9 +4,7 @@ import lombok.extern.log4j.Log4j2;
 import nur.kg.cryptobot.client.MarketClient;
 import nur.kg.cryptobot.metrics.MetricsService;
 import nur.kg.domain.dto.TickerDto;
-import nur.kg.domain.enums.OrderType;
-import nur.kg.domain.enums.Side;
-import nur.kg.domain.enums.Symbol;
+import nur.kg.domain.enums.*;
 import nur.kg.domain.request.OrderRequest;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -56,26 +54,58 @@ public class MarketService {
 
         MarketState state = stateMap.computeIfAbsent(dto.symbol(), s -> new MarketState(SHORT_WINDOW, LONG_WINDOW));
         state.update(dto.last());
-
         if (!state.ready()) return Mono.empty();
 
         BigDecimal shortAvg = state.shortAverage();
         BigDecimal longAvg = state.longAverage();
-        Side signal = null;
 
-        if (!state.positionOpen && shortAvg.compareTo(longAvg) > 0) {
-            signal = Side.BUY;
-            state.positionOpen = true;
-        } else if (state.positionOpen && shortAvg.compareTo(longAvg) < 0) {
-            signal = Side.SELL;
-            state.positionOpen = false;
+        // --- Determine crossover signals ---
+        TradeAction signal = null;
+        if (shortAvg.compareTo(longAvg) > 0 && state.position == Position.SHORT) {
+            // Trend reversal: short -> long
+            signal = TradeAction.CLOSE_SHORT_OPEN_LONG;
+        } else if (shortAvg.compareTo(longAvg) > 0 && state.position == Position.NONE) {
+            // Opening first long
+            signal = TradeAction.OPEN_LONG;
+        } else if (shortAvg.compareTo(longAvg) < 0 && state.position == Position.LONG) {
+            // Trend reversal: long -> short
+            signal = TradeAction.CLOSE_LONG_OPEN_SHORT;
+        } else if (shortAvg.compareTo(longAvg) < 0 && state.position == Position.NONE) {
+            // Opening first short
+            signal = TradeAction.OPEN_SHORT;
         }
 
-        if (signal != null) {
-            OrderRequest order = toOrderRequest(dto);
-            return submitOrder(dto, order);
-        }
+        if (signal == null) return Mono.empty();
 
+        return handleSignal(dto, state, signal);
+    }
+
+    // --- order handling ---
+    private Mono<Void> handleSignal(TickerDto dto, MarketState state, TradeAction signal) {
+        switch (signal) {
+            case CLOSE_LONG_OPEN_SHORT -> {
+                OrderRequest close = toOrderRequest(dto, Side.SELL, "close_long");
+                OrderRequest open = toOrderRequest(dto, Side.SELL, "open_short");
+                state.position = Position.SHORT;
+                return submitOrder(dto, close).then(submitOrder(dto, open));
+            }
+            case CLOSE_SHORT_OPEN_LONG -> {
+                OrderRequest close = toOrderRequest(dto, Side.BUY, "close_short");
+                OrderRequest open = toOrderRequest(dto, Side.BUY, "open_long");
+                state.position = Position.LONG;
+                return submitOrder(dto, close).then(submitOrder(dto, open));
+            }
+            case OPEN_LONG -> {
+                OrderRequest open = toOrderRequest(dto, Side.BUY, "open_long");
+                state.position = Position.LONG;
+                return submitOrder(dto, open);
+            }
+            case OPEN_SHORT -> {
+                OrderRequest open = toOrderRequest(dto, Side.SELL, "open_short");
+                state.position = Position.SHORT;
+                return submitOrder(dto, open);
+            }
+        }
         return Mono.empty();
     }
 
@@ -88,15 +118,13 @@ public class MarketService {
             return client.processOrder(order)
                     .doOnSuccess(v -> {
                         long elapsed = System.nanoTime() - start;
-                        metricsService.getOrderProcessingTimer(dto.symbol())
-                                .record(elapsed, TimeUnit.NANOSECONDS);
+                        metricsService.getOrderProcessingTimer(dto.symbol()).record(elapsed, TimeUnit.NANOSECONDS);
                         log.info("Order {} processed success for {} @{}", order.id(), order.symbol(), order.limitPrice());
                     })
                     .doOnError(e -> {
                         metricsService.getOrdersFailedCounter(dto.symbol()).increment();
                         long elapsed = System.nanoTime() - start;
-                        metricsService.getOrderProcessingTimer(dto.symbol())
-                                .record(elapsed, TimeUnit.NANOSECONDS);
+                        metricsService.getOrderProcessingTimer(dto.symbol()).record(elapsed, TimeUnit.NANOSECONDS);
                         log.warn("Order {} failed for {}: {}", order.id(), order.symbol(), e.toString());
                     })
                     .onErrorResume(e -> Mono.empty())
@@ -104,28 +132,29 @@ public class MarketService {
         });
     }
 
-    private OrderRequest toOrderRequest(TickerDto t) {
-        UUID orderId = UUID.randomUUID();
+    // --- Build order ---
+    private OrderRequest toOrderRequest(TickerDto dto, Side side, String reason) {
         return new OrderRequest(
-                orderId.toString(),
-                t.symbol(),
-                Side.BUY,
-                OrderType.MARKET,
-                BigDecimal.valueOf(0.01),
-                t.last(),
-                "moving_average_signal",
-                t.exchange()
+                UUID.randomUUID().toString(),
+                dto.symbol(),
+                side,
+                OrderType.LIMIT,
+                BigDecimal.ONE,         // quantity
+                dto.last(),             // price
+                reason,
+                dto.exchange()
         );
     }
 
+    // --- MarketState now tracks position ---
     private static class MarketState {
         private final Deque<BigDecimal> shortWindow = new ArrayDeque<>();
         private final Deque<BigDecimal> longWindow = new ArrayDeque<>();
-        private final int shortSize;
-        private final int longSize;
         private BigDecimal shortSum = BigDecimal.ZERO;
         private BigDecimal longSum = BigDecimal.ZERO;
-        private boolean positionOpen = false;
+        private final int shortSize;
+        private final int longSize;
+        private Position position = Position.NONE;
 
         MarketState(int shortSize, int longSize) {
             this.shortSize = shortSize;
@@ -133,11 +162,11 @@ public class MarketService {
         }
 
         void update(BigDecimal price) {
-            shortWindow.addLast(price);
+            shortWindow.add(price);
             shortSum = shortSum.add(price);
             if (shortWindow.size() > shortSize) shortSum = shortSum.subtract(shortWindow.removeFirst());
 
-            longWindow.addLast(price);
+            longWindow.add(price);
             longSum = longSum.add(price);
             if (longWindow.size() > longSize) longSum = longSum.subtract(longWindow.removeFirst());
         }
