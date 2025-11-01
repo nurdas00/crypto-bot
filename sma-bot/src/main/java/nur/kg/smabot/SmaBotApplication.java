@@ -1,15 +1,15 @@
-package nur.kg.cryptobot;
+package nur.kg.smabot;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
-@SpringBootApplication
-@ConfigurationPropertiesScan(basePackages = "nur.kg.cryptobot.config")
-public class CryptoBotApplication {
+@SpringBootApplication(scanBasePackages = {"nur.kg"})
+@ConfigurationPropertiesScan(basePackages = "nur.kg.smabot")
+public class SmaBotApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(CryptoBotApplication.class, args);
+        SpringApplication.run(SmaBotApplication.class, args);
     }
 
 }

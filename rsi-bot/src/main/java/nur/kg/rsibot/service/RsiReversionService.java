@@ -1,13 +1,14 @@
-package nur.kg.cryptobot.market;
+package nur.kg.rsibot.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import nur.kg.cryptobot.client.MarketClient;
-import nur.kg.cryptobot.config.BotProperties;
+import nur.kg.cryptobot.market.MarketService;
 import nur.kg.cryptobot.metrics.MetricsService;
 import nur.kg.domain.dto.TickerDto;
 import nur.kg.domain.enums.*;
 import nur.kg.domain.request.OrderRequest;
+import nur.kg.rsibot.config.BotProperties;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -23,18 +24,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Log4j2
 @Service
 @RequiredArgsConstructor
-public class MarketService {
+public class RsiReversionService implements MarketService {
 
     private final BotProperties botProperties;
     private final MetricsService metricsService;
     private final MarketClient client;
 
     private final AtomicInteger inflight = new AtomicInteger();
-    private final Map<Symbol, MarketState> stateMap = new ConcurrentHashMap<>();
+    private final Map<Symbol, RsiState> stateMap = new ConcurrentHashMap<>();
 
-    private static final int SHORT_WINDOW = 20;
-    private static final int LONG_WINDOW  = 100;
-    private static final BigDecimal EPS_BPS = new BigDecimal("0.0002");
+    private static final int RSI_PERIOD = 14;
+    private static final int PRICE_SCALE = 4;
 
     public Mono<Void> processMarket(Flux<TickerDto> ticks) {
         return ticks
@@ -50,88 +50,66 @@ public class MarketService {
         if (dto == null || dto.last() == null) return Mono.empty();
 
         metricsService.getPriceSummary(dto.symbol()).record(dto.last().doubleValue());
-        MarketState state = stateMap.computeIfAbsent(dto.symbol(), s -> new MarketState(SHORT_WINDOW, LONG_WINDOW));
+        RsiState st = stateMap.computeIfAbsent(dto.symbol(), s -> new RsiState(RSI_PERIOD));
 
-        state.update(dto.last());
-        if (!state.ready()) return Mono.empty();
-        if (!state.cooldownDone()) return Mono.empty();
+        BigDecimal price = dto.last();
+        st.update(price);
+        if (!st.ready()) return Mono.empty();
 
-        BigDecimal shortAvg = state.shortAverage();
-        BigDecimal longAvg  = state.longAverage();
-
-        BigDecimal rel = shortAvg.subtract(longAvg).abs()
-                .divide(dto.last().max(BigDecimal.ONE), 8, RoundingMode.HALF_UP);
-        if (rel.compareTo(EPS_BPS) < 0) return Mono.empty();
-
-        TradeAction signal = getTradeAction(shortAvg, longAvg, state);
+        TradeAction signal = getSignal(st);
         if (signal == null) return Mono.empty();
 
-        return handleSignal(dto, state, signal);
+        return handleSignal(dto, st, signal);
     }
 
-    private static TradeAction getTradeAction(BigDecimal shortAvg, BigDecimal longAvg, MarketState state) {
-        if (state.getPosition() != Position.NONE) return null;
-        int cmp = shortAvg.compareTo(longAvg);
-        if (cmp > 0)  return TradeAction.OPEN_LONG;
-        if (cmp < 0)  return TradeAction.OPEN_SHORT;
+    private TradeAction getSignal(RsiState st) {
+        if (st.pos != Position.NONE) return null;
+        if (st.prevRsi <= 30 && st.rsi > 30) return TradeAction.OPEN_LONG;
+        if (st.prevRsi >= 70 && st.rsi < 70) return TradeAction.OPEN_SHORT;
         return null;
     }
 
-    private Mono<Void> handleSignal(TickerDto dto, MarketState state, TradeAction signal) {
+    private Mono<Void> handleSignal(TickerDto dto, RsiState st, TradeAction signal) {
         switch (signal) {
             case OPEN_LONG -> {
-                OrderRequest open = toOpenRequestWithBracket(dto, Side.BUY, "open_long");
-                return submitOrder(dto, open)
-                        .doOnSuccess(v -> {
-                            state.setPosition(Position.LONG);
-                            state.markAction();
-                        });
+                OrderRequest open = toOpenOrder(dto, Side.BUY, "rsi_long");
+                return submit(dto, open).doOnSuccess(v -> st.pos = Position.LONG);
             }
             case OPEN_SHORT -> {
-                OrderRequest open = toOpenRequestWithBracket(dto, Side.SELL, "open_short");
-                return submitOrder(dto, open)
-                        .doOnSuccess(v -> {
-                            state.setPosition(Position.SHORT);
-                            state.markAction();
-                        });
+                OrderRequest open = toOpenOrder(dto, Side.SELL, "rsi_short");
+                return submit(dto, open).doOnSuccess(v -> st.pos = Position.SHORT);
             }
         }
         return Mono.empty();
     }
 
-    private Mono<Void> submitOrder(TickerDto dto, OrderRequest order) {
+    private Mono<Void> submit(TickerDto dto, OrderRequest order) {
         return Mono.defer(() -> {
-            log.info("Submitting order {} for {} {} qty={} (reason: {}) TP={} SL={} type={}",
-                    order.id(), order.symbol(), order.side(), order.qty(), order.reason(),
-                    order.tp(), order.sl(), order.type());
-
             metricsService.getOrdersSubmittedCounter(dto.symbol()).increment();
             inflight.incrementAndGet();
             long start = System.nanoTime();
+            log.info("Submitting order {} {} {} qty={} tp={} sl={}",
+                    order.id(), order.symbol(), order.side(), order.qty(), order.tp(), order.sl());
 
             return client.processOrder(order)
                     .doOnSuccess(v -> {
                         long elapsed = System.nanoTime() - start;
                         metricsService.getOrderProcessingTimer(dto.symbol()).record(elapsed, TimeUnit.NANOSECONDS);
-                        log.info("Order {} success for {} {}", order.id(), order.symbol(), order.side());
+                        log.info("Order {} OK {}", order.id(), order.symbol());
                     })
                     .doOnError(e -> {
                         metricsService.getOrdersFailedCounter(dto.symbol()).increment();
                         long elapsed = System.nanoTime() - start;
                         metricsService.getOrderProcessingTimer(dto.symbol()).record(elapsed, TimeUnit.NANOSECONDS);
-                        log.warn("Order {} failed for {}: {}", order.id(), order.symbol(), e.toString());
+                        log.warn("Order {} failed {}: {}", order.id(), order.symbol(), e.toString());
                     })
                     .onErrorResume(e -> Mono.empty())
                     .doFinally(sig -> inflight.decrementAndGet());
         });
     }
 
-    private OrderRequest toOpenRequestWithBracket(TickerDto dto, Side side, String reason) {
-        final Symbol symbol = dto.symbol();
-        final int priceScale = 4;
-
-        BigDecimal last = dto.last();
-        if (last == null) last = BigDecimal.ZERO;
+    private OrderRequest toOpenOrder(TickerDto dto, Side side, String reason) {
+        BigDecimal last = dto.last() == null ? BigDecimal.ZERO : dto.last();
 
         BigDecimal qty = new BigDecimal("0.001");
 
@@ -147,12 +125,12 @@ public class MarketService {
             sl = last.add(slDelta);
         }
 
-        tp = tp.setScale(priceScale, RoundingMode.HALF_UP);
-        sl = sl.setScale(priceScale, RoundingMode.HALF_UP);
+        tp = tp.setScale(PRICE_SCALE, RoundingMode.HALF_UP);
+        sl = sl.setScale(PRICE_SCALE, RoundingMode.HALF_UP);
 
         return OrderRequest.builder()
                 .id(UUID.randomUUID().toString())
-                .symbol(symbol)
+                .symbol(dto.symbol())
                 .side(side)
                 .type(OrderType.MARKET)
                 .qty(qty)
@@ -164,5 +142,4 @@ public class MarketService {
                 .sl(sl)
                 .build();
     }
-
 }

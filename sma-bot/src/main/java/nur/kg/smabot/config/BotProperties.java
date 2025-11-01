@@ -1,4 +1,4 @@
-package nur.kg.cryptobot.config;
+package nur.kg.smabot.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

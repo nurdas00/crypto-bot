@@ -3,13 +3,15 @@ server:
 
 spring:
   application:
-    name: crypto-bot
-
-exchange:
-  url: 'http://localhost:8080'
+    name: sma-bot
 
 bot:
   id: SMA
+
+exchange:
+  urls:
+    - name: bybit
+      url: 'http://localhost:8080'
 
 management:
   server:

@@ -1,4 +1,4 @@
-package nur.kg.cryptobot.market;
+package nur.kg.smabot.service;
 
 import lombok.Getter;
 import lombok.Setter;
