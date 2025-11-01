@@ -1,7 +1,7 @@
 package nur.kg.cryptobot.controller;
 
 import lombok.RequiredArgsConstructor;
-import nur.kg.cryptobot.service.MarketService;
+import nur.kg.cryptobot.market.MarketService;
 import nur.kg.domain.dto.TickerDto;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
