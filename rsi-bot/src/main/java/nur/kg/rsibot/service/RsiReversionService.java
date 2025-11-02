@@ -15,6 +15,7 @@ import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,17 +32,21 @@ public class RsiReversionService implements MarketService {
     private final MarketClient client;
 
     private final AtomicInteger inflight = new AtomicInteger();
-    private final Map<Symbol, RsiState> stateMap = new ConcurrentHashMap<>();
 
-    private static final int RSI_PERIOD = 14;
+    // Per-symbol simple state: last buy time and "waiting to sell on next tick"
+    private final Map<Symbol, RoundtripState> stateMap = new ConcurrentHashMap<>();
+
+    // ====== Strategy parameters ======
+    private static final Duration BUY_PERIOD = Duration.ofSeconds(5); // buy every 5s
     private static final int PRICE_SCALE = 4;
+    private static final BigDecimal DEFAULT_QTY = new BigDecimal("0.001");
 
     public Mono<Void> processMarket(Flux<TickerDto> ticks) {
         return ticks
                 .doOnNext(t -> metricsService.getTicksReceivedCounter(t.symbol()).increment())
                 .concatMap(this::processSingle)
                 .then()
-                .doOnSubscribe(s -> log.info("Started market processing"))
+                .doOnSubscribe(s -> log.info("Started market processing (buy every {}s, sell on next tick)", BUY_PERIOD.getSeconds()))
                 .doOnError(e -> log.error("Market processing error", e))
                 .doOnTerminate(() -> log.info("Market processing terminated"));
     }
@@ -50,37 +55,33 @@ public class RsiReversionService implements MarketService {
         if (dto == null || dto.last() == null) return Mono.empty();
 
         metricsService.getPriceSummary(dto.symbol()).record(dto.last().doubleValue());
-        RsiState st = stateMap.computeIfAbsent(dto.symbol(), s -> new RsiState(RSI_PERIOD));
+        RoundtripState st = stateMap.computeIfAbsent(dto.symbol(), s -> new RoundtripState());
 
-        BigDecimal price = dto.last();
-        st.update(price);
-        if (!st.ready()) return Mono.empty();
+        long now = System.nanoTime();
 
-        TradeAction signal = getSignal(st);
-        if (signal == null) return Mono.empty();
-
-        return handleSignal(dto, st, signal);
-    }
-
-    private TradeAction getSignal(RsiState st) {
-        if (st.pos != Position.NONE) return null;
-        if (st.prevRsi <= 30 && st.rsi > 30) return TradeAction.OPEN_LONG;
-        if (st.prevRsi >= 70 && st.rsi < 70) return TradeAction.OPEN_SHORT;
-        return null;
-    }
-
-    private Mono<Void> handleSignal(TickerDto dto, RsiState st, TradeAction signal) {
-        switch (signal) {
-            case OPEN_LONG -> {
-                OrderRequest open = toOpenOrder(dto, Side.BUY, "rsi_long");
-                return submit(dto, open).doOnSuccess(v -> st.pos = Position.LONG);
-            }
-            case OPEN_SHORT -> {
-                OrderRequest open = toOpenOrder(dto, Side.SELL, "rsi_short");
-                return submit(dto, open).doOnSuccess(v -> st.pos = Position.SHORT);
-            }
+        // If we bought previously, sell on the very next tick
+        if (st.waitingToSell) {
+            OrderRequest sell = toMarketOrder(dto, Side.SELL, "sell_next_tick");
+            return submit(dto, sell)
+                    .doOnSuccess(v -> st.waitingToSell = false);
         }
+
+        // Otherwise, check if it's time to buy (every 5 seconds)
+        if (st.lastBuyNano == 0L || elapsedAtLeast(st.lastBuyNano, now, BUY_PERIOD)) {
+            OrderRequest buy = toMarketOrder(dto, Side.BUY, "periodic_buy_5s");
+            return submit(dto, buy)
+                    .doOnSuccess(v -> {
+                        st.lastBuyNano = now;
+                        st.waitingToSell = true; // arm the immediate next-tick sell
+                    });
+        }
+
         return Mono.empty();
+    }
+
+    private boolean elapsedAtLeast(long startNano, long nowNano, Duration d) {
+        long need = TimeUnit.NANOSECONDS.convert(d.toMillis(), TimeUnit.MILLISECONDS);
+        return (nowNano - startNano) >= need;
     }
 
     private Mono<Void> submit(TickerDto dto, OrderRequest order) {
@@ -108,25 +109,15 @@ public class RsiReversionService implements MarketService {
         });
     }
 
-    private OrderRequest toOpenOrder(TickerDto dto, Side side, String reason) {
+    /**
+     * Builds a simple MARKET order with no TP/SL for this toy strategy.
+     */
+    private OrderRequest toMarketOrder(TickerDto dto, Side side, String reason) {
         BigDecimal last = dto.last() == null ? BigDecimal.ZERO : dto.last();
+        BigDecimal qty = DEFAULT_QTY;
 
-        BigDecimal qty = new BigDecimal("0.001");
-
-        BigDecimal slDelta = new BigDecimal("0.5");
-        BigDecimal tpDelta = slDelta.multiply(new BigDecimal("4"));
-
-        BigDecimal tp, sl;
-        if (side == Side.BUY) {
-            tp = last.add(tpDelta);
-            sl = last.subtract(slDelta);
-        } else {
-            tp = last.subtract(tpDelta);
-            sl = last.add(slDelta);
-        }
-
-        tp = tp.setScale(PRICE_SCALE, RoundingMode.HALF_UP);
-        sl = sl.setScale(PRICE_SCALE, RoundingMode.HALF_UP);
+        // For visibility in logs, show rounded last; TP/SL intentionally null
+        BigDecimal lastRounded = last.setScale(PRICE_SCALE, RoundingMode.HALF_UP);
 
         return OrderRequest.builder()
                 .id(UUID.randomUUID().toString())
@@ -135,11 +126,16 @@ public class RsiReversionService implements MarketService {
                 .type(OrderType.MARKET)
                 .qty(qty)
                 .limitPrice(null)
-                .reason(reason)
+                .reason(reason + "_@price_" + lastRounded)
                 .exchange(dto.exchange())
                 .botId(botProperties.id())
-                .tp(tp)
-                .sl(sl)
+                .tp(null)
+                .sl(null)
                 .build();
+    }
+
+    private static final class RoundtripState {
+        volatile long lastBuyNano = 0L;
+        volatile boolean waitingToSell = false;
     }
 }
