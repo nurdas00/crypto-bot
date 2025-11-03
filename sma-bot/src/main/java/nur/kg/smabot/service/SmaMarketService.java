@@ -144,7 +144,7 @@ public class SmaMarketService implements MarketService {
                 .id(UUID.randomUUID().toString())
                 .symbol(symbol)
                 .side(side)
-                .type(OrderType.MARKET)
+                .type(OrderType.LIMIT)
                 .qty(qty)
                 .limitPrice(null)
                 .reason(reason)
