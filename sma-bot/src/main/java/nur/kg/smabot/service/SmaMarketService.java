@@ -54,6 +54,7 @@ public class SmaMarketService implements MarketService {
         MarketState state = stateMap.computeIfAbsent(dto.symbol(), s -> new MarketState(SHORT_WINDOW, LONG_WINDOW));
 
         state.update(dto.last());
+
         if (!state.ready()) return Mono.empty();
 
         BigDecimal shortAvg = state.shortAverage();
