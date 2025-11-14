@@ -62,6 +62,7 @@ public class SmaMarketService implements MarketService {
         TradeAction signal = getTradeAction(shortAvg, longAvg, state);
         if (signal == null) return Mono.empty();
         return handleSignal(dto, state, signal);
+
     }
 
     private static TradeAction getTradeAction(BigDecimal shortAvg, BigDecimal longAvg, MarketState state) {
