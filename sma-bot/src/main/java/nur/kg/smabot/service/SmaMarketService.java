@@ -154,5 +154,6 @@ public class SmaMarketService implements MarketService {
                 .tp(tp)
                 .sl(sl)
                 .build();
+
     }
 }
