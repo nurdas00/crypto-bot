@@ -38,6 +38,7 @@ public class SmaMarketService implements MarketService {
 
     @Override
     public Mono<Void> processMarket(Flux<TickerDto> ticks) {
+
         return ticks
                 .doOnNext(t -> metricsService.getTicksReceivedCounter(t.symbol()).increment())
                 .concatMap(this::processSingle)
