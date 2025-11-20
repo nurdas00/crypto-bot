@@ -58,6 +58,7 @@ public class SmaMarketService implements MarketService {
         state.update(dto.last());
         if (!state.ready()) return Mono.empty();
 
+
         BigDecimal shortAvg = state.shortAverage();
         BigDecimal longAvg = state.longAverage();
 
