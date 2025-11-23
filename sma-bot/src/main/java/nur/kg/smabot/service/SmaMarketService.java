@@ -49,7 +49,6 @@ public class SmaMarketService implements MarketService {
     }
 
     private Mono<Void> processSingle(TickerDto dto) {
-
         if (dto == null || dto.last() == null) return Mono.empty();
 
         metricsService.getPriceSummary(dto.symbol()).record(dto.last().doubleValue());
