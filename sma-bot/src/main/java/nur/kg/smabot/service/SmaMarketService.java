@@ -54,9 +54,6 @@ public class SmaMarketService implements MarketService {
         metricsService.getPriceSummary(dto.symbol()).record(dto.last().doubleValue());
         MarketState state = stateMap.computeIfAbsent(dto.symbol(), s -> new MarketState(SHORT_WINDOW, LONG_WINDOW));
 
-        state.update(dto.last());
-        if (!state.ready()) return Mono.empty();
-
         BigDecimal shortAvg = state.shortAverage();
         BigDecimal longAvg = state.longAverage();
 
