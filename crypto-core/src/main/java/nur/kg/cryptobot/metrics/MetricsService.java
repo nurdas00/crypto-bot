@@ -69,6 +69,7 @@ public class MetricsService {
     }
 
     public void registerInflightOrdersGauge(AtomicInteger inflight) {
+
         Gauge.builder("market.orders.inflight", inflight, AtomicInteger::get)
                 .description("Number of orders currently in flight")
                 .register(registry);
