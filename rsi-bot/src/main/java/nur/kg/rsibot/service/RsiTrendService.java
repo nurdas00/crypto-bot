@@ -36,9 +36,13 @@ public class RsiTrendService implements MarketService {
     private final AtomicInteger inflight = new AtomicInteger();
     private final Map<nur.kg.domain.enums.Symbol, RsiState> stateMap = new ConcurrentHashMap<>();
 
-    // === Params ===
     private static final BigDecimal DEFAULT_QTY = new BigDecimal("0.001");
-    private static final int PRICE_SCALE = 4;
+    private static final int PRICE_SCALE = 2;
+
+    private static final BigDecimal PRICE_OFFSET = new BigDecimal("0.001");
+
+    private static final BigDecimal SL_PCT = new BigDecimal("0.01");
+    private static final BigDecimal TP_PCT = new BigDecimal("0.02");
 
     @Override
     public Mono<Void> processMarket(Flux<TickerDto> ticks) {
@@ -46,7 +50,7 @@ public class RsiTrendService implements MarketService {
                 .doOnNext(t -> metricsService.getTicksReceivedCounter(t.symbol()).increment())
                 .concatMap(this::processSingle)
                 .then()
-                .doOnSubscribe(s -> log.info("Started market processing: trend-based (RS up/down)"))
+                .doOnSubscribe(s -> log.info("Started market processing: trend-based (RS up/down, LIMIT orders)"))
                 .doOnError(e -> log.error("Market processing error", e))
                 .doOnTerminate(() -> log.info("Market processing terminated"));
     }
@@ -67,23 +71,24 @@ public class RsiTrendService implements MarketService {
     }
 
     private TradeAction pickAction(RsiState st) {
-        // If trend is UP and not long -> open long. If trend is DOWN and not short -> open short.
         if (st.isUptrend() && st.pos != Position.LONG) return TradeAction.OPEN_LONG;
         if (st.isDowntrend() && st.pos != Position.SHORT) return TradeAction.OPEN_SHORT;
-        return null; // FLAT or already aligned
+        return null;
     }
 
     private Mono<Void> handleAction(TickerDto dto, RsiState st, TradeAction action) {
         switch (action) {
             case OPEN_LONG -> {
-                OrderRequest open = toMarketOrder(dto, Side.BUY, "trend_up_rs=" + st.rs());
+                OrderRequest open = toLimitOrder(dto, Side.BUY, "trend_up_rs=" + st.rs());
                 return submit(dto, open).doOnSuccess(v -> st.pos = Position.LONG);
             }
             case OPEN_SHORT -> {
-                OrderRequest open = toMarketOrder(dto, Side.SELL, "trend_down_rs=" + st.rs());
+                OrderRequest open = toLimitOrder(dto, Side.SELL, "trend_down_rs=" + st.rs());
                 return submit(dto, open).doOnSuccess(v -> st.pos = Position.SHORT);
             }
-            default -> { return Mono.empty(); }
+            default -> {
+                return Mono.empty();
+            }
         }
     }
 
@@ -92,8 +97,8 @@ public class RsiTrendService implements MarketService {
             metricsService.getOrdersSubmittedCounter(dto.symbol()).increment();
             inflight.incrementAndGet();
             long start = System.nanoTime();
-            log.info("Submitting order {} {} {} qty={} tp={} sl={}",
-                    order.id(), order.symbol(), order.side(), order.qty(), order.tp(), order.sl());
+            log.info("Submitting order {} {} {} qty={} limit={} tp={} sl={}",
+                    order.id(), order.symbol(), order.side(), order.qty(), order.limitPrice(), order.tp(), order.sl());
 
             return client.processOrder(order)
                     .doOnSuccess(v -> {
@@ -113,23 +118,50 @@ public class RsiTrendService implements MarketService {
         });
     }
 
-    private OrderRequest toMarketOrder(TickerDto dto, Side side, String reason) {
+    private OrderRequest toLimitOrder(TickerDto dto, Side side, String reason) {
         BigDecimal last = dto.last() == null ? BigDecimal.ZERO : dto.last();
-        BigDecimal lastRounded = last.setScale(PRICE_SCALE, RoundingMode.HALF_UP);
+
+        BigDecimal rawLimitPrice = side == Side.BUY
+                ? last.multiply(BigDecimal.ONE.subtract(PRICE_OFFSET))
+                : last.multiply(BigDecimal.ONE.add(PRICE_OFFSET));
+
+        BigDecimal limitPrice = rawLimitPrice.setScale(PRICE_SCALE, RoundingMode.DOWN);
+
+        BigDecimal tpPrice;
+        BigDecimal slPrice;
+
+        if (side == Side.BUY) {
+            tpPrice = limitPrice
+                    .multiply(BigDecimal.ONE.add(TP_PCT))
+                    .setScale(PRICE_SCALE, RoundingMode.DOWN);
+
+            slPrice = limitPrice
+                    .multiply(BigDecimal.ONE.subtract(SL_PCT))
+                    .setScale(PRICE_SCALE, RoundingMode.DOWN);
+        } else {
+            BigDecimal base = last.max(limitPrice);
+
+            tpPrice = base
+                    .multiply(BigDecimal.ONE.subtract(TP_PCT))
+                    .setScale(PRICE_SCALE, RoundingMode.DOWN);
+
+            slPrice = base
+                    .multiply(BigDecimal.ONE.add(SL_PCT))
+                    .setScale(PRICE_SCALE, RoundingMode.UP);
+        }
 
         return OrderRequest.builder()
                 .id(UUID.randomUUID().toString())
                 .symbol(dto.symbol())
-                .limitPrice(lastRounded)
                 .side(side)
                 .type(OrderType.LIMIT)
                 .qty(DEFAULT_QTY)
-                .limitPrice(null)
-                .reason(reason + "_@price_" + lastRounded)
+                .limitPrice(limitPrice)
+                .tp(tpPrice)
+                .sl(slPrice)
+                .reason(reason + "_@limit_" + limitPrice + "_tp_" + tpPrice + "_sl_" + slPrice)
                 .exchange(dto.exchange())
                 .botId(botProperties.id())
-                .tp(null)
-                .sl(null)
                 .build();
     }
 }
