@@ -120,6 +120,7 @@ public class RsiTrendService implements MarketService {
         return OrderRequest.builder()
                 .id(UUID.randomUUID().toString())
                 .symbol(dto.symbol())
+                .limitPrice(lastRounded)
                 .side(side)
                 .type(OrderType.LIMIT)
                 .qty(DEFAULT_QTY)
@@ -127,7 +128,7 @@ public class RsiTrendService implements MarketService {
                 .reason(reason + "_@price_" + lastRounded)
                 .exchange(dto.exchange())
                 .botId(botProperties.id())
-                .tp(null)  // add TP/SL if you want
+                .tp(null)
                 .sl(null)
                 .build();
     }
