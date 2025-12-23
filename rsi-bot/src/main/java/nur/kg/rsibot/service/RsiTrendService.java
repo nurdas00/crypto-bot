@@ -76,7 +76,6 @@ public class RsiTrendService implements MarketService {
         return null;
     }
 
-
     private Mono<Void> handleAction(TickerDto dto, RsiState st, TradeAction action) {
         switch (action) {
             case OPEN_LONG -> {
