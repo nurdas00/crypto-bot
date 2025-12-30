@@ -62,6 +62,7 @@ public class RsiTrendService implements MarketService {
         RsiState st = stateMap.computeIfAbsent(dto.symbol(), s -> new RsiState(14));
 
         st.update(dto.last());
+
         if (!st.ready()) return Mono.empty();
 
         TradeAction action = pickAction(st);
