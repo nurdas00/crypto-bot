@@ -66,6 +66,7 @@ public class RsiTrendService implements MarketService {
         if (!st.ready()) return Mono.empty();
 
         TradeAction action = pickAction(st);
+
         if (action == null) return Mono.empty();
 
         return handleAction(dto, st, action);
